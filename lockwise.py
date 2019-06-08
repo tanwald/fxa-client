@@ -2,36 +2,39 @@
 
 import base64
 import hashlib
-import hmac
 import json
-import os
 import time
 import uuid
+from argparse import ArgumentParser
+
 from binascii import hexlify
 from getpass import getpass
 
 import fxa.core
 import fxa.crypto
 import syncclient.client
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import padding
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+from imports import JsonImport
+from keybundle import KeyBundle
 
 TOKEN_SERVICE = 'https://token.services.mozilla.com/'
-CRYPTO_BACKEND = default_backend()
 
 
 class Lockwise(object):
+    importer = None
 
-    def __init__(self, fxa_email, fxa_password):
-        assertion, key_bundle = self.login(fxa_email, fxa_password)
+    def __init__(self, fxa_email, fxa_password, dryrun=False):
+        self.importer = JsonImport()
 
-        self.fxa_client = syncclient.client.SyncClient(
-            assertion,
-            hexlify(hashlib.sha256(key_bundle).digest()[:16])
-        )
+        if not dryrun:
+            assertion, key_bundle = self.login(fxa_email, fxa_password)
 
-        self.fxa_key_bundle = self.create_fxa_key_bundle(key_bundle)
+            self.fxa_client = syncclient.client.SyncClient(
+                assertion,
+                hexlify(hashlib.sha256(key_bundle).digest()[:16])
+            )
+
+            self.fxa_key_bundle = self.create_fxa_key_bundle(key_bundle)
 
     def login(self, fxa_email, fxa_password):
         client = fxa.core.Client()
@@ -57,7 +60,7 @@ class Lockwise(object):
             if session is not None:
                 session.destroy_session()
             else:
-                print('aborting...')
+                print('could not login. aborting...')
                 exit(1)
 
         return assertion, key_bundle
@@ -77,28 +80,39 @@ class Lockwise(object):
             base64.b64decode(keys['default'][1]),
         )
 
-    def prepare_record(self, username, password, hostname, username_field, password_field):
+    def finalize_record(self, record):
         now = int(time.time() * 1000)
 
         return {
             'id': str(uuid.uuid4()),
-            'username': username,
-            'password': password,
-            'hostname': hostname,
-            'formSubmitURL': hostname,
-            'usernameField': username_field,
-            'passwordField': password_field,
+            'username': record['username'],
+            'password': record['password'],
+            'hostname': record['hostname'],
+            'formSubmitURL': record['hostname'],
+            'usernameField': '',
+            'passwordField': '',
             'timeCreated': now,
             'timePasswordChanged': now,
             'httpRealm': None,
         }
 
-    def create_records(self):
-        record = self.prepare_record('username', 'password', 'https://serenditree.io', 'username', 'password')
-        encrypted_record = self.fxa_key_bundle.encrypt(record)
-        assert self.fxa_key_bundle.decrypt(encrypted_record) == record
+    def create_records(self, dryrun=False):
+        records = [self.finalize_record(r) for r in self.importer.load('data.json')]
+        encrypted_records = []
 
-        self.fxa_client.put_record('passwords', encrypted_record)
+        if not dryrun:
+            for record in records:
+                encrypted_record = self.fxa_key_bundle.encrypt(record)
+                assert self.fxa_key_bundle.decrypt(encrypted_record) == record
+                encrypted_records.append(encrypted_record)
+
+        if len(encrypted_records) > 0:
+            for index, record in enumerate(encrypted_records):
+                print('\ncreating record {} of {}...'.format(index + 1, len(encrypted_records)))
+                print(json.dumps(records[index], indent=2))
+                print(json.dumps(record, indent=2))
+                print(self.fxa_client.put_record('passwords', record))
+                time.sleep(1)
 
     def retrieve_records(self):
         records = []
@@ -110,68 +124,52 @@ class Lockwise(object):
 
         print(json.dumps(records, indent=2))
 
+        return records
 
-class KeyBundle:
+    def delete_record(self, record_id):
+        print('deleting record {}...'.format(record_id))
+        self.fxa_client.delete_record('passwords', record_id)
 
-    def __init__(self, enc_key, mac_key):
-        self.enc_key = enc_key
-        self.mac_key = mac_key
-
-    def decrypt(self, data):
-        payload = json.loads(data['payload'])
-
-        mac = hmac.new(self.mac_key, payload['ciphertext'].encode('utf-8'), hashlib.sha256)
-        if mac.hexdigest() != payload['hmac']:
-            raise ValueError('hmac mismatch: {} != {}'.format(mac.hexdigest(), payload['hmac']))
-
-        iv = base64.b64decode(payload['IV'])
-        cipher = Cipher(
-            algorithms.AES(self.enc_key),
-            modes.CBC(iv),
-            backend=CRYPTO_BACKEND
-        )
-
-        decryptor = cipher.decryptor()
-        plaintext = decryptor.update(base64.b64decode(payload['ciphertext']))
-        plaintext += decryptor.finalize()
-
-        unpadder = padding.PKCS7(128).unpadder()
-        plaintext = unpadder.update(plaintext) + unpadder.finalize()
-
-        return json.loads(plaintext)
-
-    def encrypt(self, data):
-        plaintext = json.dumps(data)
-
-        padder = padding.PKCS7(128).padder()
-        plaintext = padder.update(plaintext) + padder.finalize()
-
-        iv = os.urandom(16)
-        cipher = Cipher(
-            algorithms.AES(self.enc_key),
-            modes.CBC(iv),
-            backend=CRYPTO_BACKEND
-        )
-
-        encryptor = cipher.encryptor()
-        cipher_text = encryptor.update(plaintext)
-        cipher_text += encryptor.finalize()
-
-        b64_cipher_text = base64.b64encode(cipher_text)
-
-        return {
-            'id': data['id'],
-            'payload': json.dumps({
-                'ciphertext': b64_cipher_text,
-                'IV': base64.b64encode(iv),
-                'hmac': hmac.new(self.mac_key, b64_cipher_text, hashlib.sha256).hexdigest(),
-            })
-        }
+    def delete_all_records(self):
+        records = self.retrieve_records()
+        for index, record in enumerate(records):
+            print('deleting record {} of {}...'.format(index + 1, len(records)))
+            self.delete_record(record['id'])
 
 
 if __name__ == '__main__':
-    email = input('email: ')
-    password = getpass('password: ')
+    arg_parser = ArgumentParser(description='lockwise cli')
+    arg_parser.add_argument('command', nargs=1, type=str, metavar='CMD',
+                            help='command')
+    arg_parser.add_argument('-d', '--dryrun', action='store_true',
+                            help='dry run')
+    arg_parser.add_argument('-a', '--all', action='store_true',
+                            help='dry run')
+    arg_parser.add_argument('-u', '--user', nargs='+', type=str, metavar='USER',
+                            help='firefox account username')
+    arg_parser.add_argument('-p', '--password', nargs='+', type=str, metavar='PASS',
+                            help='firefox account password')
 
-    lockwise = Lockwise(email, password)
-    lockwise.retrieve_records()
+    args = arg_parser.parse_args()
+
+    if args.user:
+        email = args.user[0]
+    else:
+        email = input('email: ')
+
+    if args.password:
+        password = args.password[0]
+    else:
+        password = getpass('password: ')
+
+    lockwise = Lockwise(email, password, dryrun=args.dryrun)
+
+    if args.command[0] == 'list':
+        lockwise.retrieve_records()
+    elif args.command[0] == 'import':
+        lockwise.create_records(dryrun=args.dryrun)
+    elif args.command[0] == 'delete':
+        if args.all:
+            lockwise.delete_all_records()
+        else:
+            lockwise.delete_record('todo')
