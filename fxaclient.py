@@ -14,19 +14,20 @@ import fxa.core
 import fxa.crypto
 import syncclient.client
 
-from imports import JsonImport
-from keybundle import KeyBundle
+from fxaimport import FxaJsonImport
+from fxakeybundle import FxaKeyBundle
 
 
-class Lockwise(object):
+class FxaClient(object):
     TOKEN_SERVICE_ENDPOINT = 'https://token.services.mozilla.com/'
-    BOOKMARKS_COLLECTION = 'bookmarks'
-    PASSWORDS_COLLECTION = 'passwords'
 
+    fxa_client = None
     importer = None
 
-    def __init__(self, fxa_email, fxa_password, dryrun=False):
-        self.importer = JsonImport()
+    def __init__(self, fxa_email, fxa_password, collection, dryrun=False):
+        self.collection = collection
+        self.importer = FxaJsonImport()
+        self.dryrun = dryrun
 
         if not dryrun:
             assertion, key_bundle = self.login(fxa_email, fxa_password)
@@ -69,7 +70,7 @@ class Lockwise(object):
 
     def create_fxa_key_bundle(self, key_bundle):
         raw_sync_key = fxa.crypto.derive_key(key_bundle, 'oldsync', 64)
-        root_key_bundle = KeyBundle(
+        root_key_bundle = FxaKeyBundle(
             raw_sync_key[:32],
             raw_sync_key[32:],
         )
@@ -77,7 +78,7 @@ class Lockwise(object):
         keys_bso = self.fxa_client.get_record('crypto', 'keys')
         keys = root_key_bundle.decrypt(keys_bso)
 
-        return KeyBundle(
+        return FxaKeyBundle(
             base64.b64decode(keys['default'][0]),
             base64.b64decode(keys['default'][1]),
         )
@@ -98,11 +99,11 @@ class Lockwise(object):
             'httpRealm': None,
         }
 
-    def create_records(self, dryrun=False):
+    def create_records(self):
         records = [self.finalize_record(r) for r in self.importer.load('data.json')]
         encrypted_records = []
 
-        if not dryrun:
+        if not self.dryrun:
             for record in records:
                 encrypted_record = self.fxa_key_bundle.encrypt(record)
                 assert self.fxa_key_bundle.decrypt(encrypted_record) == record
@@ -119,7 +120,7 @@ class Lockwise(object):
     def retrieve_records(self):
         records = []
 
-        for encrypted_record in self.fxa_client.get_records(self.BOOKMARKS_COLLECTION):
+        for encrypted_record in self.fxa_client.get_records(self.collection):
             record = self.fxa_key_bundle.decrypt(encrypted_record)
             if 'deleted' not in record:
                 records.append(record)
@@ -128,31 +129,48 @@ class Lockwise(object):
 
         return records
 
-    def delete_record(self, record_id):
-        print('deleting record {}...'.format(record_id))
-        self.fxa_client.delete_record('passwords', record_id)
+    def delete_records(self, record_ids):
+        for index, record_id in enumerate(record_ids):
+            print('deleting record {} ({}/{})...'.format(record_id, index + 1, len(record_ids)))
+            if not self.dryrun:
+                self.fxa_client.delete_record(self.collection, record_id)
 
     def delete_all_records(self):
         records = self.retrieve_records()
-        for index, record in enumerate(records):
-            print('deleting record {} of {}...'.format(index + 1, len(records)))
-            self.delete_record(record['id'])
+        self.delete_records([r['id'] for r in records])
 
 
 if __name__ == '__main__':
     arg_parser = ArgumentParser(description='lockwise cli')
-    arg_parser.add_argument('command', nargs=1, type=str, metavar='CMD',
+    arg_parser.add_argument('command', nargs=1, metavar='CMD',
                             help='command')
+    arg_parser.add_argument('args', nargs='*', metavar='ARGS',
+                            help='optional arguments')
+    arg_parser.add_argument('-B', '--bookmarks', action='store_const', const='bookmarks',
+                            help='target bookmarks')
+    arg_parser.add_argument('-P', '--passwords', action='store_const', const='passwords',
+                            help='target passwords')
     arg_parser.add_argument('-d', '--dryrun', action='store_true',
                             help='dry run')
     arg_parser.add_argument('-a', '--all', action='store_true',
-                            help='dry run')
-    arg_parser.add_argument('-u', '--user', nargs='+', type=str, metavar='USER',
+                            help='crud all')
+    arg_parser.add_argument('-u', '--user', nargs=1, type=str, metavar='USER',
                             help='firefox account username')
-    arg_parser.add_argument('-p', '--password', nargs='+', type=str, metavar='PASS',
+    arg_parser.add_argument('-p', '--password', nargs=1, type=str, metavar='PASS',
                             help='firefox account password')
 
     args = arg_parser.parse_args()
+
+    collection = None
+
+    if args.bookmarks:
+        collection = args.bookmarks
+    elif args.passwords:
+        collection = args.passwords
+    else:
+        arg_parser.print_help()
+        print('\nerror: no target collection set')
+        exit(1)
 
     if args.user:
         email = args.user[0]
@@ -164,14 +182,20 @@ if __name__ == '__main__':
     else:
         password = getpass('password: ')
 
-    lockwise = Lockwise(email, password, dryrun=args.dryrun)
+    fxa_client = FxaClient(email, password, collection, dryrun=args.dryrun)
 
     if args.command[0] == 'list':
-        lockwise.retrieve_records()
+        if args.args:
+            fxa_client.retrieve_records()
     elif args.command[0] == 'import':
-        lockwise.create_records(dryrun=args.dryrun)
+        fxa_client.create_records()
     elif args.command[0] == 'delete':
-        if args.all:
-            lockwise.delete_all_records()
+        if args.all and input('delete all records [N/y]: ') == 'y':
+            fxa_client.delete_all_records()
+        elif args.args:
+            if input('delete provided records [N/y]: ') == 'y':
+                fxa_client.delete_records(args.args)
         else:
-            lockwise.delete_record('todo')
+            arg_parser.print_help()
+            print('\nerror: no record ids provided')
+            exit(1)

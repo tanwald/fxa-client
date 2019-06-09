@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 CRYPTO_BACKEND = default_backend()
 
 
-class KeyBundle:
+class FxaKeyBundle:
 
     def __init__(self, enc_key, mac_key):
         self.enc_key = enc_key

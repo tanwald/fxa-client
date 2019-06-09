@@ -3,7 +3,7 @@
 import json
 
 
-class JsonImport(object):
+class FxaJsonImport(object):
 
     def load(self, data):
         converted_records = []
@@ -36,5 +36,5 @@ class JsonImport(object):
 
 
 if __name__ == '__main__':
-    importer = JsonImport()
+    importer = FxaJsonImport()
     importer.load('data.json')
