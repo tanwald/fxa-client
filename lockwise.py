@@ -17,10 +17,12 @@ import syncclient.client
 from imports import JsonImport
 from keybundle import KeyBundle
 
-TOKEN_SERVICE = 'https://token.services.mozilla.com/'
-
 
 class Lockwise(object):
+    TOKEN_SERVICE_ENDPOINT = 'https://token.services.mozilla.com/'
+    BOOKMARKS_COLLECTION = 'bookmarks'
+    PASSWORDS_COLLECTION = 'passwords'
+
     importer = None
 
     def __init__(self, fxa_email, fxa_password, dryrun=False):
@@ -51,7 +53,7 @@ class Lockwise(object):
                     session.resend_email_code()
                 status = session.get_email_status()
 
-            assertion = session.get_identity_assertion(TOKEN_SERVICE)
+            assertion = session.get_identity_assertion(self.TOKEN_SERVICE_ENDPOINT)
             _, key_bundle = session.fetch_keys()
 
         except Exception as e:
@@ -117,7 +119,7 @@ class Lockwise(object):
     def retrieve_records(self):
         records = []
 
-        for encrypted_record in self.fxa_client.get_records('passwords'):
+        for encrypted_record in self.fxa_client.get_records(self.BOOKMARKS_COLLECTION):
             record = self.fxa_key_bundle.decrypt(encrypted_record)
             if 'deleted' not in record:
                 records.append(record)
