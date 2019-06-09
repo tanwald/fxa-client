@@ -100,7 +100,7 @@ class FxaClient(object):
         }
 
     def create_records(self):
-        records = [self.finalize_record(r) for r in self.importer.load('data.json')]
+        records = [self.finalize_record(r) for r in self.importer.load('data.json', dryrun=self.dryrun)]
         encrypted_records = []
 
         if not self.dryrun:
