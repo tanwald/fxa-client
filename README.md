@@ -1,1 +1,1 @@
-# lockwise
+# fxa-client
