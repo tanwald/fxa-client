@@ -5,7 +5,7 @@ extend it according to your needs.
 
 ## Install dependencies
 
-`pip install --user syncclient`
+`pip install --user syncclient fastapi uvicorn`
 
 ## Import adapters
 
