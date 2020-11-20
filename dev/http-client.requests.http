@@ -1,0 +1,14 @@
+GET  {{host}}
+Accept: application/json
+
+###
+GET  {{host}}/bookmarks
+Accept: application/json
+X-User: {{user}}
+X-Password: {{password}}
+
+###
+GET  {{host}}/logins
+Accept: application/json
+X-User: {{user}}
+X-Password: {{password}}

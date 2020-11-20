@@ -143,7 +143,7 @@ class FxaClient(object):
 if __name__ == '__main__':
     arg_parser = ArgumentParser(description='lockwise cli')
     arg_parser.add_argument('command', nargs=1, metavar='CMD',
-                            help='command')
+                            help='command {list|import|delete}')
     arg_parser.add_argument('args', nargs='*', metavar='ARGS',
                             help='optional arguments')
     arg_parser.add_argument('-B', '--bookmarks', action='store_const', const='bookmarks',
@@ -185,8 +185,8 @@ if __name__ == '__main__':
     fxa_client = FxaClient(email, password, collection, dryrun=args.dryrun)
 
     if args.command[0] == 'list':
-        if args.args:
-            fxa_client.retrieve_records()
+        print('retrieving {}...'.format(collection))
+        fxa_client.retrieve_records()
     elif args.command[0] == 'import':
         fxa_client.create_records()
     elif args.command[0] == 'delete':
